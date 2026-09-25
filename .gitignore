@@ -3,3 +3,10 @@ node_modules/
 .next/
 next-env.d.ts
 *.tsbuildinfo
+
+# Локальные настройки Claude Code
+.claude/
+
+# Генерируются агентом при каждом запуске
+data/output.md
+data/shopping.md
