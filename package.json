@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "replay": "tsx --env-file-if-exists=.env scripts/replay.ts",
+    "eval": "tsx --env-file-if-exists=.env scripts/eval.ts"
   },
   "keywords": [],
   "author": "",
@@ -33,6 +35,7 @@
     "@types/react-dom": "^19.3.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }
 }

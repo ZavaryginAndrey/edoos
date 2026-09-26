@@ -13,17 +13,19 @@ npm install
 npm run dev          # http://localhost:3000 — must be run from the repo root (see data/ paths below)
 npm run build
 npx tsc --noEmit     # typecheck; there is no lint or test setup
+npm run replay runs/run-XXX.json   # re-run a traced task through the current harness, print old vs new
+npm run eval         # run evals/cases/*.json sequentially, PASS/FAIL table (real DeepSeek calls)
 ```
 
 Required `.env` in the repo root: `DEEPSEEK_API_KEY`. Optional: `DEEPSEEK_BASE_URL` (default `https://api.deepseek.com`), `DEEPSEEK_MODEL` (default `deepseek-v4-flash`).
 
-There is no CLI entry point by design (the old `index.ts` and `tsx` were removed): the only way to run the agents is `POST /api/agent/run` with `{ task }`, via the UI or e.g. curl. Round-by-round logs go to the `next dev` server console.
+There is no user-facing CLI by design (the old `index.ts` was removed): users run the agents via `POST /api/agent/run` with `{ task }` (UI or curl). `tsx` exists only for the dev scripts in `scripts/` (`replay.ts`, `eval.ts`), which call `runHealthAgent` directly and load `.env` via `--env-file-if-exists`. Round-by-round logs go to the `next dev` server console.
 
 ## Architecture
 
-Request flow: `app/page.tsx` (client) → `app/api/agent/run/route.ts` → `runHealthAgent(task, { maxRounds = 3, minRounds = 1, promptVersions = ACTIVE_PROMPTS })` in `src/harness/runHealthAgent.ts` → returns `{ plan, review: { verdict, score, issues }, rounds: RoundState[], finalScore, improved, promptVersions, toolCalls, durationMs }` (`toolCalls` = names of the tools the coach called, in order, across all rounds and the save step).
+Request flow: `app/page.tsx` (client) → `app/api/agent/run/route.ts` → `runHealthAgent(task, { maxRounds = 3, minRounds = 1, promptVersions = ACTIVE_PROMPTS })` in `src/harness/runHealthAgent.ts` → returns `{ plan, review: { verdict, score, issues }, rounds: RoundState[], finalScore, improved, promptVersions, model, toolCalls, durationMs }` (`toolCalls` = names of the tools the coach called, in order, across all rounds and the save step).
 
-`src/harness/` is split by responsibility: `runHealthAgent.ts` (orchestrator only), `validateReview.ts` (zod `ReviewSchema`, `safeParseReview`, one-retry `validateReview`), `rounds.ts` (`RoundState { round, plan, review }`, `RoundHistory`, round log line), `score.ts` (`finalScore` = score of the last `approve`, else null; `improved` = last round score > first), `promptVersions.ts` (`ACTIVE_PROMPTS` + loading `prompts/<name>.<version>.md`). Nothing is persisted except `data/output.md` and `data/shopping.md`.
+`src/harness/` is split by responsibility: `runHealthAgent.ts` (orchestrator only), `validateReview.ts` (zod `ReviewSchema`, `safeParseReview`, one-retry `validateReview`), `rounds.ts` (`RoundState { round, plan, review }`, `RoundHistory`, round log line), `score.ts` (`finalScore` = score of the last `approve`, else null; `improved` = last round score > first), `promptVersions.ts` (`ACTIVE_PROMPTS` + loading `prompts/<name>.<version>.md`). `traceRun.ts` (`buildTrace` + `traceRun`: every completed run — pre-check stop included — writes `runs/run-<timestamp>.json` from `finish()`; write errors are logged, never thrown; runs that throw leave no trace). Persisted: `data/output.md`, `data/shopping.md` and `runs/*.json` (gitignored except `runs/run-example.json`). Eval cases are `evals/cases/*.json` (`{ name, task, expect: { verdict, minScore? } }`); normal-case tasks must avoid the pre-check regex words (`боль(?!ш)` is deliberately not triggered by «больше»/«большой»).
 
 The orchestration loop in `runHealthAgent` is explicit — the two agents never talk to each other directly and there are no SDK handoffs. Only the coach has tools (see Tools below); the reviewer has none:
 

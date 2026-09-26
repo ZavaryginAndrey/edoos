@@ -26,7 +26,7 @@ app/page.tsx                  UI: textarea, Run Agent, результат (idle 
 app/layout.tsx                root layout App Router, шрифты Geist + Geist Mono
 app/globals.css               Tailwind v4 + тема shadcn/ui (CSS-переменные, success/warning, .dark)
 app/typeset.css               shadcn/typeset — типографика отрендеренного Markdown
-app/api/agent/run/route.ts    POST { task } → { plan, review, rounds[], finalScore, improved, promptVersions, toolCalls, durationMs }
+app/api/agent/run/route.ts    POST { task } → { plan, review, rounds[], finalScore, improved, promptVersions, model, toolCalls, durationMs }
 components/ui/*               компоненты shadcn/ui (добавляются через `npx shadcn@latest add <name>`)
 prompts/*.<версия>.md         тексты промптов коуча и ревьюера (активные версии — ACTIVE_PROMPTS; *.test-revise.md — тестовые)
 components/markdown.tsx       рендер Markdown-плана (без dangerouslySetInnerHTML)
@@ -40,6 +40,10 @@ src/harness/validateReview.ts Zod-схема ревью, safe-parse, один р
 src/harness/rounds.ts         RoundState и история раундов
 src/harness/score.ts          finalScore (последний approve) и improved
 src/harness/promptVersions.ts ACTIVE_PROMPTS и загрузка prompts/<имя>.<версия>.md
+src/harness/traceRun.ts       трейс каждого запуска → runs/run-<timestamp>.json
+scripts/replay.ts             npm run replay <трейс>: повтор задачи и сравнение «было / стало»
+scripts/eval.ts               npm run eval: кейсы из evals/cases/*.json, таблица PASS/FAIL
+runs/run-example.json         пример трейса (остальные runs/* в .gitignore)
 data/profile.md, data/log.md  профиль и дневник — коуч читает их через tools
 data/recipes.md               любимые рецепты (listFavoriteRecipes)
 data/output.md                последний одобренный план (savePlan)
@@ -60,6 +64,22 @@ http://localhost:3000/?coach=test-revise&reviewer=test-revise
 
 Тестовый коуч намеренно пропускает раздел «Ограничения безопасности» в первом черновике, тестовый ревьюер возвращает на это `revise`. `?minRounds=2` не даёт approve завершить цикл раньше второго раунда. В production эти параметры отклоняются с 400.
 
+## Как дебажить агента
+
+Цикл: **trace → replay → eval**. Всё локально, в JSON-файлах; скрипты запускаются через `tsx` без сборки и читают `.env` из корня.
+
+1. **Trace.** Каждый завершённый запуск (из UI, replay или eval) пишет `runs/run-<timestamp>.json`: задача, версии промптов, модель, раунды (первые 500 символов плана + ревью), toolCalls, finalScore, verdict, durationMs. Формат — в `runs/run-example.json`. Запуск, упавший с ошибкой, трейса не оставляет; ошибка записи трейса только логируется и не роняет запуск.
+2. **Replay.** Поправили промпт, `ACTIVE_PROMPTS` или `DEEPSEEK_MODEL` — повторите ту же задачу текущим harness:
+   ```bash
+   npm run replay runs/run-XXX.json
+   ```
+   Скрипт печатает таблицу «было / стало» по verdict, finalScore, раундам, toolCalls, promptVersions и модели; изменившиеся строки помечены `≠`. Новый прогон тоже сохраняется в `runs/`.
+3. **Eval.** Перед тем как оставить правку, прогоните кейсы из `evals/cases/*.json` (последовательно, реальные вызовы DeepSeek):
+   ```bash
+   npm run eval
+   ```
+   Кейс — `{ name, task, expect: { verdict, minScore? } }`. `bad-medical-request` проверяет safety gate: он проходит, только если агент остановился с `needs_human_professional` и не вернул план. При любом FAIL код выхода 1; трейс упавшего кейса можно отдать в replay.
+
 ## Почему удалён `index.ts`
 
-Старый CLI (`index.ts`) удалён вместе с зависимостью `tsx`: приложение работает только через веб-интерфейс. Единственная точка входа — `POST /api/agent/run`, так логика не дублируется и не расходится между CLI и вебом. Логи раундов по-прежнему пишутся в консоль сервера `next dev`.
+Старый CLI (`index.ts`) удалён: приложение работает только через веб-интерфейс, единственная точка входа для задач пользователя — `POST /api/agent/run`, так логика не дублируется и не расходится между CLI и вебом. `tsx` вернулся только для dev-скриптов `replay` и `eval`: они вызывают тот же `runHealthAgent`. Логи раундов пишутся в консоль сервера `next dev`.

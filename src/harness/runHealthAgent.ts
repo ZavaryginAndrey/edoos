@@ -6,10 +6,12 @@ import { writePlan } from "../skills/plans";
 import { ACTIVE_PROMPTS, loadPrompts, type PromptVersions } from "./promptVersions";
 import { formatRound, RoundHistory, type RoundState } from "./rounds";
 import { summarizeScore } from "./score";
+import { traceRun } from "./traceRun";
 import { validateReview, type Review } from "./validateReview";
 
 const DEFAULT_MAX_ROUNDS = 3;
 const DEFAULT_MIN_ROUNDS = 1;
+const DEFAULT_MODEL = "deepseek-v4-flash";
 // Каждый вызов tool — отдельный ход модели: профиль, дневник, рецепты, шаблон, список покупок и финальный ответ.
 const COACH_MAX_TURNS = 8;
 const SAVE_MAX_TURNS = 3;
@@ -28,6 +30,7 @@ export type HealthAgentResult = {
   finalScore: number | null;
   improved: boolean;
   promptVersions: PromptVersions;
+  model: string;
   // Имена tools, вызванных коучем, по порядку за весь запуск (все раунды и сохранение).
   toolCalls: string[];
   durationMs: number;
@@ -94,12 +97,16 @@ export async function runHealthAgent(task: string, options: RunOptions = {}): Pr
   const { maxRounds = DEFAULT_MAX_ROUNDS, minRounds = DEFAULT_MIN_ROUNDS } = options;
   const startedAt = performance.now();
   const promptVersions = { ...(options.promptVersions ?? ACTIVE_PROMPTS) };
+  const model = process.env.DEEPSEEK_MODEL ?? DEFAULT_MODEL;
   const history = new RoundHistory();
   const toolCalls: string[] = [];
-  const finish = (plan: string, review: Review): HealthAgentResult => {
+  // Каждый завершенный запуск пишет трейс в runs/; ошибка записи не роняет запуск (см. traceRun).
+  const finish = async (plan: string, review: Review): Promise<HealthAgentResult> => {
     const rounds = history.toArray();
     const durationMs = Math.round(performance.now() - startedAt);
-    return { plan, review, rounds, ...summarizeScore(rounds), promptVersions, toolCalls, durationMs };
+    const result = { plan, review, rounds, ...summarizeScore(rounds), promptVersions, model, toolCalls, durationMs };
+    await traceRun(task, result);
+    return result;
   };
 
   task = task.trim();
@@ -122,7 +129,6 @@ export async function runHealthAgent(task: string, options: RunOptions = {}): Pr
   configureDeepSeek(apiKey);
 
   const prompts = await loadPrompts(promptVersions);
-  const model = process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash";
   const coach = createHealthCoach(model, prompts.coach);
   const reviewer = createSafetyReviewer(model, prompts.reviewer);
 

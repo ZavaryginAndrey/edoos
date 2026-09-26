@@ -15,7 +15,8 @@ export function reviewTaskSafety(task: string): Review | null {
   const patterns = [
     new RegExp(`(${intent}).{0,50}(${meds})`),
     new RegExp(`(${meds}).{0,50}(пить|принимать|для похудения|от давления|от сахара|дозиров\\w*)`),
-    /(диагноз|лечение|лечить|болит|боль|симптом|травм|давлени\w*|сердц\w*|сахар\w*|беремен\w*)/,
+    // боль(?!ш): «больше», «большой» — не медицина, иначе бытовые задачи останавливаются на pre-check.
+    /(диагноз|лечение|лечить|болит|боль(?!ш)|симптом|травм|давлени\w*|сердц\w*|сахар\w*|беремен\w*)/,
   ];
   return patterns.some((pattern) => pattern.test(text))
     ? ReviewSchema.parse({ verdict: "needs_human_professional", score: 0, issues: ["Запрос касается медицинской темы: лекарств, симптомов, лечения или дозировок."] })
