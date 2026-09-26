@@ -19,7 +19,7 @@ npm run eval         # run evals/cases/*.json sequentially, PASS/FAIL table (rea
 
 Required `.env` in the repo root: `DEEPSEEK_API_KEY`. Optional: `DEEPSEEK_BASE_URL` (default `https://api.deepseek.com`), `DEEPSEEK_MODEL` (default `deepseek-v4-flash`).
 
-There is no user-facing CLI by design (the old `index.ts` was removed): users run the agents via `POST /api/agent/run` with `{ task }` (UI or curl). `tsx` exists only for the dev scripts in `scripts/` (`replay.ts`, `eval.ts`), which call `runHealthAgent` directly and load `.env` via `--env-file-if-exists`. Round-by-round logs go to the `next dev` server console.
+There is no user-facing CLI by design (the old `index.ts` was removed): users run the agents via `POST /api/agent/run` with `{ task }` (UI or curl). `tsx` exists only for the dev scripts in `scripts/` (`replay.ts`, `eval.ts`), thin CLI wrappers over `src/dev/` that load `.env` via `--env-file-if-exists`. Round-by-round logs go to the `next dev` server console.
 
 ## Architecture
 
@@ -34,6 +34,10 @@ The orchestration loop in `runHealthAgent` is explicit — the two agents never 
 3. Verdict handling: `approve` before `minRounds` → loop continues (issues go to the coach, verdict is recorded as-is); `approve` → a save step re-runs the coach with `{ approvedPlan }` in the run context so it calls `savePlan` (if it doesn't, or alters the text, the harness writes the approved plan itself), then the plan is returned; `needs_human_professional` → returns with an empty plan; `revise` → the reviewer's `issues` plus the previous plan are appended to the coach prompt for the next round. If all rounds end in `revise`, the last plan is returned but **not** saved.
 
 Agent instructions live in `prompts/healthCoach.<v>.md` and `prompts/safetyReviewer.<v>.md`; the active versions are `ACTIVE_PROMPTS` in `src/harness/promptVersions.ts` (read from `join(process.cwd(), "prompts")` on every request). A new prompt version = a new file + changing that constant; the versions used are returned as `promptVersions`.
+
+### Dev console (`/dev`, dev only)
+
+Replay and eval logic lives in `src/dev/` and is shared by the CLI scripts and the UI: `replay.ts` (`listTraces`, `readTrace`, `parseTrace`, pure `compareTraces`, `replayTrace`), `evals.ts` (`listEvalCases`, `readEvalCase`, pure `checkEval`/`describeExpect`, `runEvalCase` — agent errors become a failed row, not a throw), `devOnly.ts` (`devEnabled()`, 404/500 helpers). `runId` and case ids are validated by regex against path traversal. `app/dev/page.tsx` is a server component (`notFound()` in production, `force-dynamic`) that reads the lists and renders the client `app/dev/dev-console.tsx`; runs go through `POST /api/dev/eval { id }` and `POST /api/dev/replay { runId }` (404 in production, 400 on bad ids before any LLM call). The console allows one run at a time (`runHealthAgent` configures the DeepSeek client globally), runs "all evals" as sequential per-case requests, and calls `router.refresh()` after each run so the new trace shows up. `src/dev/*` reads files — client code imports only its *types*.
 
 Test mode (dev only): the route accepts `minRounds` and `prompts: { coach?, reviewer? }` (400 in production); the UI reads them from the URL, e.g. `/?coach=test-revise&reviewer=test-revise` runs `prompts/*.test-revise.md`, which force a revise → approve cycle.
 
@@ -52,7 +56,7 @@ Per the README, the prompts, pre-check and loop were ported from the earlier V0 
 
 ### UI
 
-- `app/page.tsx` is a single client component with an `idle | running | result` state machine. It imports only the `HealthAgentResult` *type* from the harness. It duplicates `MAX_ROUNDS = 3` — keep it in sync with `DEFAULT_MAX_ROUNDS` in `src/harness/runHealthAgent.ts`. The result card shows duration, prompt versions and a collapsed round history (`components/ui/collapsible.tsx`).
+- `app/page.tsx` is a single client component with an `idle | running | result` state machine. It imports only the `HealthAgentResult` *type* from the harness. The result cards (`Result`, round history, tool calls, `VERDICTS`, `MAX_ROUNDS`) live in `components/agent-result.tsx` and are shared with `/dev`. `MAX_ROUNDS = 3` there duplicates `DEFAULT_MAX_ROUNDS` in `src/harness/runHealthAgent.ts` — keep them in sync. The result card shows duration, prompt versions and a collapsed round history (`components/ui/collapsible.tsx`). The header links to `/dev` only when `NODE_ENV !== "production"`.
 - Built with **shadcn/ui** (`components.json`: style `base-nova` on Base UI primitives, `rsc: true`, lucide icons) and **Tailwind CSS v4** (via `@tailwindcss/postcss`, no `tailwind.config`). Add components with `npx shadcn@latest add <name>` — they land in `components/ui/` and are owned code; style with Tailwind utilities and theme tokens rather than new CSS. Base UI composes via the `render` prop (e.g. `<TooltipTrigger render={<Button />}>`), not Radix's `asChild`.
 - `app/globals.css` is the shadcn theme: CSS variables on `:root` / `.dark` mapped through `@theme inline`. Beyond the stock tokens it adds `--success` and `--warning` (used for review verdicts). Keep the neutral palette; color is reserved for status.
 - Dark mode: `next-themes` (`attribute="class"`, system default) in `components/providers.tsx`, toggle in `components/theme-toggle.tsx`. On the client the theme script gets `type="application/json"` to silence React 19's "script tag in a client component" warning — it has already run from the server HTML.

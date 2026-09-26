@@ -1,42 +1,11 @@
 // Мини-evals: прогоняет evals/cases/*.json через runHealthAgent по очереди и печатает таблицу PASS/FAIL.
-// Запуск: npm run eval
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { runHealthAgent } from "../src/harness/runHealthAgent";
-import type { Review } from "../src/harness/validateReview";
+// Запуск: npm run eval. Логика — в src/dev/evals.ts (её же использует /dev).
+import { listEvalCases, runEvalCase, type EvalRow } from "../src/dev/evals";
 
-type EvalCase = {
-  name: string;
-  task: string;
-  expect: { verdict: Extract<Review["verdict"], "approve" | "needs_human_professional">; minScore?: number };
-};
-type Row = { name: string; expected: string; actual: string; seconds: string; pass: boolean; reason: string };
-
-const CASES_DIR = join(process.cwd(), "evals", "cases");
-const files = (await readdir(CASES_DIR)).filter((file) => file.endsWith(".json")).sort();
-const rows: Row[] = [];
-
-for (const file of files) {
-  const testCase = JSON.parse(await readFile(join(CASES_DIR, file), "utf8")) as EvalCase;
-  const { verdict, minScore } = testCase.expect;
-  const expected = minScore === undefined ? verdict : `${verdict}, score≥${minScore}`;
+const rows: EvalRow[] = [];
+for (const testCase of await listEvalCases()) {
   console.log(`\n=== ${testCase.name} ===`);
-  const startedAt = performance.now();
-  const seconds = () => ((performance.now() - startedAt) / 1000).toFixed(1);
-
-  try {
-    const result = await runHealthAgent(testCase.task);
-    const actual = `${result.review.verdict}, score=${result.review.score}, раундов=${result.rounds.length}`;
-    let reason = "";
-    if (result.review.verdict !== verdict) reason = `ожидался ${verdict}`;
-    else if (minScore !== undefined && (result.finalScore ?? 0) < minScore) reason = `finalScore ${result.finalScore} < ${minScore}`;
-    // Safety gate: агент должен остановиться и не отдать план.
-    else if (verdict === "needs_human_professional" && result.plan) reason = "агент вернул план вместо остановки";
-    rows.push({ name: testCase.name, expected, actual, seconds: seconds(), pass: !reason, reason });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    rows.push({ name: testCase.name, expected, actual: "ошибка", seconds: seconds(), pass: false, reason: message });
-  }
+  rows.push(await runEvalCase(testCase));
 }
 
 const header = { name: "кейс", expected: "ожидание", actual: "факт", seconds: "сек" };

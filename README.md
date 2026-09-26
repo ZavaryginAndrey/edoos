@@ -27,6 +27,10 @@ app/layout.tsx                root layout App Router, шрифты Geist + Geist
 app/globals.css               Tailwind v4 + тема shadcn/ui (CSS-переменные, success/warning, .dark)
 app/typeset.css               shadcn/typeset — типографика отрендеренного Markdown
 app/api/agent/run/route.ts    POST { task } → { plan, review, rounds[], finalScore, improved, promptVersions, model, toolCalls, durationMs }
+app/dev/                      /dev (только dev): evals и replay из UI
+app/api/dev/eval/route.ts     POST { id } → строка eval-кейса с полным результатом (только dev)
+app/api/dev/replay/route.ts   POST { runId } → «было / стало» + полный результат (только dev)
+components/agent-result.tsx   карточки результата (ревью, раунды, tools, план) — главная и /dev
 components/ui/*               компоненты shadcn/ui (добавляются через `npx shadcn@latest add <name>`)
 prompts/*.<версия>.md         тексты промптов коуча и ревьюера (активные версии — ACTIVE_PROMPTS; *.test-revise.md — тестовые)
 components/markdown.tsx       рендер Markdown-плана (без dangerouslySetInnerHTML)
@@ -41,8 +45,10 @@ src/harness/rounds.ts         RoundState и история раундов
 src/harness/score.ts          finalScore (последний approve) и improved
 src/harness/promptVersions.ts ACTIVE_PROMPTS и загрузка prompts/<имя>.<версия>.md
 src/harness/traceRun.ts       трейс каждого запуска → runs/run-<timestamp>.json
-scripts/replay.ts             npm run replay <трейс>: повтор задачи и сравнение «было / стало»
-scripts/eval.ts               npm run eval: кейсы из evals/cases/*.json, таблица PASS/FAIL
+src/dev/replay.ts             список трейсов, replay и сравнение «было / стало» (для CLI и /dev)
+src/dev/evals.ts              кейсы evals/cases/*.json, прогон и проверка PASS/FAIL (для CLI и /dev)
+scripts/replay.ts             npm run replay <трейс>: CLI-обёртка над src/dev/replay.ts
+scripts/eval.ts               npm run eval: CLI-обёртка над src/dev/evals.ts
 runs/run-example.json         пример трейса (остальные runs/* в .gitignore)
 data/profile.md, data/log.md  профиль и дневник — коуч читает их через tools
 data/recipes.md               любимые рецепты (listFavoriteRecipes)
@@ -68,6 +74,8 @@ http://localhost:3000/?coach=test-revise&reviewer=test-revise
 
 Цикл: **trace → replay → eval**. Всё локально, в JSON-файлах; скрипты запускаются через `tsx` без сборки и читают `.env` из корня.
 
+То же самое доступно в UI: `http://localhost:3000/dev` (ссылка «Dev» в шапке, только в dev-режиме). Evals запускаются по одному кейсу или все подряд (строки заполняются по мере прогона), replay — из списка трейсов `runs/`; для каждого прогона видны раунды, замечания, вызванные tools и план. Одновременно идёт только один прогон. В production `/dev` и `/api/dev/*` отвечают 404.
+
 1. **Trace.** Каждый завершённый запуск (из UI, replay или eval) пишет `runs/run-<timestamp>.json`: задача, версии промптов, модель, раунды (первые 500 символов плана + ревью), toolCalls, finalScore, verdict, durationMs. Формат — в `runs/run-example.json`. Запуск, упавший с ошибкой, трейса не оставляет; ошибка записи трейса только логируется и не роняет запуск.
 2. **Replay.** Поправили промпт, `ACTIVE_PROMPTS` или `DEEPSEEK_MODEL` — повторите ту же задачу текущим harness:
    ```bash
@@ -82,4 +90,4 @@ http://localhost:3000/?coach=test-revise&reviewer=test-revise
 
 ## Почему удалён `index.ts`
 
-Старый CLI (`index.ts`) удалён: приложение работает только через веб-интерфейс, единственная точка входа для задач пользователя — `POST /api/agent/run`, так логика не дублируется и не расходится между CLI и вебом. `tsx` вернулся только для dev-скриптов `replay` и `eval`: они вызывают тот же `runHealthAgent`. Логи раундов пишутся в консоль сервера `next dev`.
+Старый CLI (`index.ts`) удалён: приложение работает только через веб-интерфейс, единственная точка входа для задач пользователя — `POST /api/agent/run`, так логика не дублируется и не расходится между CLI и вебом. `tsx` вернулся только для dev-скриптов `replay` и `eval`: они, как и страница `/dev`, используют общую логику из `src/dev/` и тот же `runHealthAgent`. Логи раундов пишутся в консоль сервера `next dev`.
