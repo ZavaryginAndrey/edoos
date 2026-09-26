@@ -7,18 +7,23 @@ import {
   ChevronDownIcon,
   CircleCheckIcon,
   ClockIcon,
+  CloudSunIcon,
   CopyIcon,
   DumbbellIcon,
+  FilePlusIcon,
   FileTextIcon,
+  FolderIcon,
   NotebookTextIcon,
   OctagonAlertIcon,
   SaveIcon,
+  SearchIcon,
   ShoppingCartIcon,
   TriangleAlertIcon,
+  UploadIcon,
   UserIcon,
   WrenchIcon,
 } from "lucide-react";
-import type { HealthAgentResult, RoundState } from "@/src/harness/runHealthAgent";
+import type { HealthAgentResult, PlanAction, RoundState } from "@/src/harness/runHealthAgent";
 import { Markdown } from "@/components/markdown";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +32,7 @@ import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader,
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
@@ -35,15 +41,32 @@ import { cn } from "@/lib/utils";
 // Держать в синхроне с DEFAULT_MAX_ROUNDS в src/harness/runHealthAgent.ts.
 export const MAX_ROUNDS = 3;
 
-// Подписи для tools из src/skills/. Неизвестное имя показывается как есть.
+// Подписи для tools коуча по исходному имени tool-а. Неизвестное имя показывается как есть: внешние серверы
+// из src/mcp/servers.config.ts могут отдавать tools, о которых UI не знает.
 const TOOLS: Record<string, { label: string; icon: typeof WrenchIcon }> = {
-  getProfile: { label: "Прочитал профиль", icon: UserIcon },
-  getRecentLog: { label: "Посмотрел дневник", icon: NotebookTextIcon },
-  listFavoriteRecipes: { label: "Открыл любимые рецепты", icon: ChefHatIcon },
+  read_profile: { label: "Прочитал профиль", icon: UserIcon },
+  read_recent_logs: { label: "Посмотрел дневник", icon: NotebookTextIcon },
+  list_recipes: { label: "Открыл любимые рецепты", icon: ChefHatIcon },
   suggestWorkoutTemplate: { label: "Подобрал шаблон тренировки", icon: DumbbellIcon },
   generateShoppingList: { label: "Составил список покупок в data/shopping.md", icon: ShoppingCartIcon },
-  savePlan: { label: "Сохранил одобренный план в data/output.md", icon: SaveIcon },
+  save_health_plan: { label: "Сохранил одобренный план в data/output.md", icon: SaveIcon },
+  metno_forecast: { label: "Проверил прогноз погоды", icon: CloudSunIcon },
+  write_file: { label: "Записал план в файл", icon: FilePlusIcon },
+  list_allowed_directories: { label: "Проверил доступные каталоги", icon: FolderIcon },
+  API_post_search: { label: "Нашёл страницу в Notion", icon: SearchIcon },
+  API_post_page: { label: "Создал страницу в Notion", icon: FilePlusIcon },
+  API_patch_block_children: { label: "Дописал содержимое страницы в Notion", icon: FileTextIcon },
+  API_update_page_markdown: { label: "Записал план на страницу в Notion", icon: FileTextIcon },
 };
+
+// SDK показывает модели MCP-tools как mcp_<сервер>__<tool>, заменяя «-» на «_» в обеих частях
+// (markdown-health → mcp_markdown_health__, API-post-page → API_post_page), поэтому ключи TOOLS — с «_».
+// Имена серверов в конфиге — kebab-case, для метки источника «_» возвращаем в «-».
+// Без префикса — локальные tools из src/skills/.
+function parseTool(name: string) {
+  const match = /^mcp_(.+?)__(.+)$/.exec(name);
+  return match ? { source: match[1].replace(/_/g, "-"), tool: match[2] } : { source: "local", tool: name };
+}
 
 export const VERDICTS = {
   approve: { label: "Одобрено", icon: CircleCheckIcon, className: "bg-success/10 text-success" },
@@ -53,6 +76,8 @@ export const VERDICTS = {
 
 export function Result({ data }: { data: HealthAgentResult }) {
   const { plan, review, rounds, improved, promptVersions, toolCalls, durationMs } = data;
+  // В результатах, собранных до появления кнопок, поля actions нет.
+  const actions = data.actions ?? [];
   const verdict = VERDICTS[review.verdict];
   const approved = review.verdict === "approve";
   const needsHuman = review.verdict === "needs_human_professional";
@@ -158,6 +183,13 @@ export function Result({ data }: { data: HealthAgentResult }) {
             <CardContent>
               <Markdown source={plan} hideTitle className="[--typeset-size:0.9375rem]" />
             </CardContent>
+            {approved && actions.length > 0 && (
+              <CardFooter className="flex-col items-start gap-3 border-t">
+                {actions.map((action) => (
+                  <PlanActionButton key={action.server} action={action} plan={plan} />
+                ))}
+              </CardFooter>
+            )}
           </Card>
         </>
       )}
@@ -205,28 +237,77 @@ function ToolCalls({ calls }: { calls: string[] }) {
     <Card>
       <CardHeader>
         <CardTitle>Что сделал агент</CardTitle>
-        <CardDescription>Инструменты, которые коуч вызвал сам, по порядку</CardDescription>
+        <CardDescription>Инструменты, которые коуч вызвал сам, по порядку. В скобках — источник: MCP-сервер или local</CardDescription>
       </CardHeader>
       <CardContent>
-        {calls.length ? (
-          <ol className="space-y-2">
-            {calls.map((name, index) => {
-              const { label, icon: Icon } = TOOLS[name] ?? { label: name, icon: WrenchIcon };
-              return (
-                <li key={index} className="flex items-center gap-3">
-                  <span className="w-4 text-right text-xs text-muted-foreground tabular-nums">{index + 1}</span>
-                  <Icon className="size-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">{label}</span>
-                  <span className="hidden font-mono text-xs text-muted-foreground sm:inline">{name}</span>
-                </li>
-              );
-            })}
-          </ol>
-        ) : (
-          <p className="text-muted-foreground">Агент не вызывал инструменты</p>
-        )}
+        {calls.length ? <ToolCallList calls={calls} /> : <p className="text-muted-foreground">Агент не вызывал инструменты</p>}
       </CardContent>
     </Card>
+  );
+}
+
+function ToolCallList({ calls }: { calls: string[] }) {
+  return (
+    <ol className="space-y-2">
+      {calls.map((name, index) => {
+        const { source, tool } = parseTool(name);
+        const { label, icon: Icon } = TOOLS[tool] ?? { label: tool, icon: WrenchIcon };
+        return (
+          <li key={index} className="flex items-center gap-3">
+            <span className="w-4 text-right text-xs text-muted-foreground tabular-nums">{index + 1}</span>
+            <Icon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1">{label}</span>
+            <Badge variant="outline" className="font-mono text-[0.625rem]">[{source}]</Badge>
+            <span className="hidden font-mono text-xs text-muted-foreground sm:inline">{tool}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+type ActionState =
+  | { status: "idle" }
+  | { status: "running" }
+  | { status: "done"; output: string; toolCalls: string[] }
+  | { status: "error"; error: string };
+
+// Кнопка сервера «по кнопке» из конфига (например, «Сохранить в Notion»): коуч выполняет поручение
+// только по явному выбору пользователя и только для одобренного плана (сверяет harness).
+function PlanActionButton({ action, plan }: { action: PlanAction; plan: string }) {
+  const [state, setState] = useState<ActionState>({ status: "idle" });
+
+  async function runAction() {
+    setState({ status: "running" });
+    try {
+      const response = await fetch("/api/agent/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ server: action.server, plan }),
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error ?? `HTTP ${response.status}`);
+      setState({ status: "done", output: json.output, toolCalls: json.toolCalls });
+    } catch (error) {
+      setState({ status: "error", error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  return (
+    <div className="w-full space-y-3">
+      <Button variant="outline" size="sm" onClick={runAction} disabled={state.status === "running" || state.status === "done"}>
+        {state.status === "running" ? <Spinner data-icon="inline-start" /> : state.status === "done" ? <CheckIcon data-icon="inline-start" /> : <UploadIcon data-icon="inline-start" />}
+        {action.label}
+        <span className="font-mono text-[0.625rem] text-muted-foreground">[{action.server}]</span>
+      </Button>
+      {state.status === "error" && <p className="text-destructive">{state.error}</p>}
+      {state.status === "done" && (
+        <div className="space-y-2">
+          {state.output && <p className="text-muted-foreground">{state.output}</p>}
+          {state.toolCalls.length > 0 && <ToolCallList calls={state.toolCalls} />}
+        </div>
+      )}
+    </div>
   );
 }
 

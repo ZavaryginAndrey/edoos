@@ -14,3 +14,7 @@ data/shopping.md
 # Трейсы запусков (src/harness/traceRun.ts); в репо только пример
 runs/*
 !runs/run-example.json
+
+# Планы, которые коуч сохраняет через filesystem MCP; сам каталог нужен серверу при старте
+plans/*
+!plans/.gitkeep
