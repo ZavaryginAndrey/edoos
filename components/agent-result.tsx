@@ -64,10 +64,46 @@ const TOOLS: Record<string, { label: string; icon: typeof WrenchIcon }> = {
 // SDK показывает модели MCP-tools как mcp_<сервер>__<tool>, заменяя «-» на «_» в обеих частях
 // (markdown-health → mcp_markdown_health__, API-post-page → API_post_page), поэтому ключи TOOLS — с «_».
 // Имена серверов в конфиге — kebab-case, для метки источника «_» возвращаем в «-».
-// Без префикса — локальные tools из src/skills/.
+// Без префикса — локальные tools из src/skills/: код самого приложения, источник «health-agent».
+const APP_SOURCE = "health-agent";
+
 function parseTool(name: string) {
   const match = /^mcp_(.+?)__(.+)$/.exec(name);
-  return match ? { source: match[1].replace(/_/g, "-"), tool: match[2] } : { source: "local", tool: name };
+  return match ? { source: match[1].replace(/_/g, "-"), tool: match[2] } : { source: APP_SOURCE, tool: name };
+}
+
+// Цвет вызова по типу: RAG (поиск по базе знаний), MCP-серверы и код приложения. Бирюзовый у приложения —
+// чтобы не путать с зелёным вердиктом «Одобрено».
+const TOOL_KINDS = {
+  rag: { icon: "text-rag", badge: "bg-rag/10 text-rag" },
+  mcp: { icon: "text-mcp", badge: "bg-mcp/10 text-mcp" },
+  agent: { icon: "text-agent", badge: "bg-agent/10 text-agent" },
+} as const;
+export type ToolKind = keyof typeof TOOL_KINDS;
+
+function toolKind(source: string, tool: string): ToolKind {
+  if (tool === "searchKnowledge") return "rag";
+  return source === APP_SOURCE ? "agent" : "mcp";
+}
+
+export const toolIconClass = (kind: ToolKind) => TOOL_KINDS[kind].icon;
+
+// Источник вызова: MCP-сервер, rag или health-agent.
+export function SourceBadge({ kind, source }: { kind: ToolKind; source: string }) {
+  return (
+    <span className={cn("inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[0.6875rem] font-medium", TOOL_KINDS[kind].badge)}>
+      {source}
+    </span>
+  );
+}
+
+// Вызов по имени tool: подпись и иконка из TOOLS, цвет и бейдж — по источнику (таймлайн чата).
+// query — подпись поиска по базе знаний; без него — обычная подпись tool-а.
+export function describeTool(name: string, query?: string) {
+  const { source, tool } = parseTool(name);
+  const kind = toolKind(source, tool);
+  const { label, icon } = query !== undefined ? { label: `«${query}»`, icon: BookOpenIcon } : TOOLS[tool] ?? { label: tool, icon: WrenchIcon };
+  return { icon, label, kind, source: kind === "rag" ? "rag" : source, tool };
 }
 
 export const VERDICTS = {
@@ -241,7 +277,7 @@ function ToolCalls({ calls, retrievals }: { calls: string[]; retrievals: Retriev
     <Card>
       <CardHeader>
         <CardTitle>Что сделал агент</CardTitle>
-        <CardDescription>Инструменты, которые коуч вызвал сам, по порядку. В скобках — источник: MCP-сервер или local</CardDescription>
+        <CardDescription>Инструменты, которые коуч вызвал сам, по порядку. Справа источник: MCP-сервер, rag (база знаний) или health-agent (код приложения)</CardDescription>
       </CardHeader>
       <CardContent>
         {calls.length ? <ToolCallList calls={calls} retrievals={retrievals} /> : <p className="text-muted-foreground">Агент не вызывал инструменты</p>}
@@ -254,23 +290,32 @@ function ToolCalls({ calls, retrievals }: { calls: string[]; retrievals: Retriev
 function ToolCallList({ calls, retrievals = [] }: { calls: string[]; retrievals?: Retrieval[] }) {
   let retrievalIndex = 0;
   return (
-    <ol className="space-y-2">
+    <ol className="space-y-1">
       {calls.map((name, index) => {
         const { source, tool } = parseTool(name);
-        const retrieval = tool === "searchKnowledge" ? retrievals[retrievalIndex++] : undefined;
-        const { label, icon: Icon } = retrieval
-          ? { label: `🔍 knowledge: ${retrieval.query} → ${retrieval.chunks.length} chunks`, icon: BookOpenIcon }
+        const kind = toolKind(source, tool);
+        const retrieval = kind === "rag" ? retrievals[retrievalIndex++] : undefined;
+        const { label, icon } = retrieval
+          ? { label: `${retrieval.query} → ${retrieval.error ? "ошибка" : `${retrieval.chunks.length} chunks`}`, icon: BookOpenIcon }
           : TOOLS[tool] ?? { label: tool, icon: WrenchIcon };
+        const row = { number: index + 1, icon, label, kind, source: kind === "rag" ? "rag" : source, tool };
         return (
-          <li key={index} className="space-y-1">
-            <div className="flex items-center gap-3">
-              <span className="w-4 text-right text-xs text-muted-foreground tabular-nums">{index + 1}</span>
-              <Icon className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">{label}</span>
-              <Badge variant="outline" className="font-mono text-[0.625rem]">[{source}]</Badge>
-              <span className="hidden font-mono text-xs text-muted-foreground sm:inline">{tool}</span>
-            </div>
-            {retrieval && <RetrievedChunks retrieval={retrieval} />}
+          <li key={index}>
+            {retrieval?.chunks.length ? (
+              <Collapsible>
+                <CollapsibleTrigger className="group -mx-1.5 w-[calc(100%+0.75rem)] rounded-md px-1.5 py-0.5 text-left outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50">
+                  <ToolCallRow {...row} expandable />
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <RetrievedChunks retrieval={retrieval} />
+                </CollapsibleContent>
+              </Collapsible>
+            ) : (
+              <div className="py-0.5">
+                <ToolCallRow {...row} />
+                {retrieval?.error && <p className="pl-14 text-xs text-destructive">База знаний недоступна: {retrieval.error}</p>}
+              </div>
+            )}
           </li>
         );
       })}
@@ -278,11 +323,43 @@ function ToolCallList({ calls, retrievals = [] }: { calls: string[]; retrievals?
   );
 }
 
+function ToolCallRow({
+  number,
+  icon: Icon,
+  label,
+  kind,
+  source,
+  tool,
+  expandable = false,
+}: {
+  number: number;
+  icon: typeof WrenchIcon;
+  label: string;
+  kind: keyof typeof TOOL_KINDS;
+  source: string;
+  tool: string;
+  expandable?: boolean;
+}) {
+  return (
+    <span className="flex items-center gap-3">
+      <span className="w-4 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{number}</span>
+      <Icon className={cn("size-4 shrink-0", TOOL_KINDS[kind].icon)} />
+      <span className="min-w-0 flex-1">
+        {label}
+        {expandable && (
+          <ChevronDownIcon className="ml-1 inline size-3.5 align-[-0.125em] text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" />
+        )}
+      </span>
+      <SourceBadge kind={kind} source={source} />
+      <span className="hidden font-mono text-xs text-muted-foreground sm:inline">{tool}</span>
+    </span>
+  );
+}
+
 // Заголовки найденных чанков — чем коуч пользовался из базы знаний.
 function RetrievedChunks({ retrieval }: { retrieval: Retrieval }) {
-  if (retrieval.error) return <p className="pl-14 text-xs text-destructive">База знаний недоступна: {retrieval.error}</p>;
   return (
-    <ul className="space-y-0.5 pl-14 text-xs text-muted-foreground">
+    <ul className="space-y-0.5 pt-1 pb-1.5 pl-14 text-xs text-muted-foreground">
       {retrieval.chunks.map((chunk) => (
         <li key={`${chunk.file}/${chunk.heading}`} className="flex gap-2">
           <span className="min-w-0 flex-1 truncate">
@@ -303,7 +380,7 @@ type ActionState =
 
 // Кнопка сервера «по кнопке» из конфига (например, «Сохранить в Notion»): коуч выполняет поручение
 // только по явному выбору пользователя и только для одобренного плана (сверяет harness).
-function PlanActionButton({ action, plan }: { action: PlanAction; plan: string }) {
+export function PlanActionButton({ action, plan }: { action: PlanAction; plan: string }) {
   const [state, setState] = useState<ActionState>({ status: "idle" });
 
   async function runAction() {
@@ -356,7 +433,7 @@ function Stat({ label, value, max, children }: { label: string; value: number; m
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {

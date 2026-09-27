@@ -5,6 +5,7 @@ import { buttonServerConfigs, connectServers, LATEST_PLAN_URI, readResource, run
 import { DATA_SERVER } from "../mcp/servers.config";
 import type { Retrieval } from "../rag/retriever";
 import { configureDeepSeek, modelName, normalizePlan, outputText, runCoach, todayLine } from "./coachRun";
+import { emitToolEvents, safeEmit, type CoachStep, type OnEvent } from "./events";
 import { ACTIVE_PROMPTS, loadPrompts, type PromptVersions } from "./promptVersions";
 import { formatRound, RoundHistory, type RoundState } from "./rounds";
 import { summarizeScore } from "./score";
@@ -25,6 +26,8 @@ export type RunOptions = {
   // Approve раньше этого раунда не завершает цикл: коуч дорабатывает план по замечаниям. Для тестов.
   minRounds?: number;
   promptVersions?: PromptVersions;
+  // События для живого UI (app/api/chat): этапы, tools коуча, вердикты. Без него поведение прежнее.
+  onEvent?: OnEvent;
 };
 // Действие по кнопке под одобренным планом: сервер из конфига с полем button (например, notion).
 export type PlanAction = { server: string; label: string };
@@ -97,6 +100,7 @@ export async function runHealthAgent(task: string, options: RunOptions = {}): Pr
   const toolCalls: string[] = [];
   const retrievals: Retrieval[] = [];
   const actions = buttonServerConfigs().map(({ name, button }) => ({ server: name, label: button!.label }));
+  const emit = safeEmit(options.onEvent);
   // Каждый завершенный запуск пишет трейс в runs/; ошибка записи не роняет запуск (см. traceRun).
   const finish = async (plan: string, review: Review): Promise<HealthAgentResult> => {
     const rounds = history.toArray();
@@ -117,6 +121,7 @@ export async function runHealthAgent(task: string, options: RunOptions = {}): Pr
   const taskReview = reviewTaskSafety(task);
   if (taskReview) {
     console.log(formatRound(history.record("", taskReview)));
+    emit({ type: "review_end", round: 1, review: taskReview, precheck: true });
     console.log("Запрос требует специалиста. План не сохранен.");
     return finish("", taskReview);
   }
@@ -129,13 +134,21 @@ export async function runHealthAgent(task: string, options: RunOptions = {}): Pr
   const runRounds = async (servers: MCPServer[]): Promise<[plan: string, review: Review]> => {
     const coach = createHealthCoach(model, prompts.coach, servers);
     const dataServer = servers.find((server) => server.name === DATA_SERVER);
+    // Шаг коуча для событий tools: номер раунда или сохранение. Без onEvent хуки не подписываются.
+    let step: CoachStep = 1;
+    if (options.onEvent) emitToolEvents(coach, emit, () => step);
     for (let round = 1; round <= maxRounds; round += 1) {
+      step = round;
+      emit({ type: "coach_start", round });
       const coachRun = await askCoach(coach, task, history.last);
+      emit({ type: "coach_end", round });
       toolCalls.push(...coachRun.toolCalls);
       retrievals.push(...coachRun.retrievals);
       const plan = coachRun.output;
+      emit({ type: "review_start", round });
       const review = await askReviewer(reviewer, task, plan);
       console.log(formatRound(history.record(plan, review)));
+      emit({ type: "review_end", round, review, precheck: false });
 
       if (review.verdict === "needs_human_professional") {
         console.log("Запрос требует специалиста. План не сохранен.");
@@ -146,7 +159,10 @@ export async function runHealthAgent(task: string, options: RunOptions = {}): Pr
         continue;
       }
       if (review.verdict === "approve") {
+        step = "save";
+        emit({ type: "save_start" });
         const saveRun = await savePlanByCoach(coach, dataServer, task, plan);
+        emit({ type: "save_end" });
         toolCalls.push(...saveRun.toolCalls);
         retrievals.push(...saveRun.retrievals);
         console.log(`План одобрен и сохранен. score=${review.score}`);
