@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { Retrieval } from "../rag/retriever";
 import type { PromptVersions } from "./promptVersions";
 import type { Review } from "./validateReview";
 
@@ -14,6 +15,8 @@ export type RunTrace = {
   model: string;
   rounds: { round: number; planExcerpt: string; review: Review }[];
   toolCalls: string[];
+  // Запросы к базе знаний и заголовки найденных чанков — чем коуч пользовался. В трейсах до RAG поля нет.
+  retrievals?: Retrieval[];
   finalScore: number | null;
   verdict: Review["verdict"];
   durationMs: number;
@@ -28,6 +31,7 @@ type TracedResult = {
   finalScore: number | null;
   promptVersions: PromptVersions;
   toolCalls: string[];
+  retrievals: Retrieval[];
   durationMs: number;
 };
 
@@ -41,6 +45,7 @@ export function buildTrace(task: string, result: TracedResult, createdAt = new D
     model: result.model,
     rounds: result.rounds.map(({ round, plan, review }) => ({ round, planExcerpt: plan.slice(0, PLAN_EXCERPT_LENGTH), review })),
     toolCalls: result.toolCalls,
+    retrievals: result.retrievals,
     finalScore: result.finalScore,
     verdict: result.review.verdict,
     durationMs: result.durationMs,

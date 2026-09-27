@@ -42,11 +42,13 @@ function calledTools(result: RunResult<any, any>): string[] {
 
 // return_error_to_model: промпт знает про tools всех серверов, а сервер может быть выключен в конфиге, не стартовать
 // или прятать tool до approve. Вызов отсутствующего tool возвращается модели как ошибка, а не роняет запуск.
+// retrievals — запросы к базе знаний за этот запуск: searchKnowledge пишет их в контекст (SDK передаёт tool тот же объект).
 export async function runCoach(agent: Agent<CoachContext>, input: string, context: CoachContext, maxTurns: number) {
-  const result = await run(agent, input, { context, maxTurns, toolNotFoundBehavior: "return_error_to_model" });
+  const runContext: CoachContext = { ...context, retrievals: [] };
+  const result = await run(agent, input, { context: runContext, maxTurns, toolNotFoundBehavior: "return_error_to_model" });
   const toolCalls = calledTools(result);
   if (toolCalls.length) console.log(`Коуч вызвал tools: ${toolCalls.join(", ")}`);
-  return { output: outputText(result.finalOutput), toolCalls };
+  return { output: outputText(result.finalOutput), toolCalls, retrievals: runContext.retrievals ?? [] };
 }
 
 // Модель не знает текущую дату, а без неё не посчитать «завтра», прогноз на нужный день и имя plans/<дата>.md.

@@ -3,6 +3,7 @@ import { createHealthCoach, type CoachContext } from "../agents/healthCoach";
 import { createSafetyReviewer, reviewTaskSafety } from "../agents/safetyReviewer";
 import { buttonServerConfigs, connectServers, LATEST_PLAN_URI, readResource, runServerConfigs } from "../mcp/servers";
 import { DATA_SERVER } from "../mcp/servers.config";
+import type { Retrieval } from "../rag/retriever";
 import { configureDeepSeek, modelName, normalizePlan, outputText, runCoach, todayLine } from "./coachRun";
 import { ACTIVE_PROMPTS, loadPrompts, type PromptVersions } from "./promptVersions";
 import { formatRound, RoundHistory, type RoundState } from "./rounds";
@@ -12,12 +13,13 @@ import { validateReview, type Review } from "./validateReview";
 
 const DEFAULT_MAX_ROUNDS = 3;
 const DEFAULT_MIN_ROUNDS = 1;
-// Каждый вызов tool — отдельный ход модели: профиль, дневник, рецепты, погода, шаблон, список покупок и ответ.
-const COACH_MAX_TURNS = 8;
+// Каждый ход модели — один или несколько параллельных вызовов tools: база знаний, профиль, дневник, рецепты,
+// погода, шаблон, список покупок и ответ. С searchKnowledge (v5) поисков бывает несколько, поэтому 10, а не 8.
+const COACH_MAX_TURNS = 10;
 // Шаг сохранения: save_health_plan, файл в plans/ (если пользователь просил) и финальный ответ.
 const SAVE_MAX_TURNS = 6;
 
-export type { PromptVersions, Review, RoundState };
+export type { PromptVersions, Retrieval, Review, RoundState };
 export type RunOptions = {
   maxRounds?: number;
   // Approve раньше этого раунда не завершает цикл: коуч дорабатывает план по замечаниям. Для тестов.
@@ -37,6 +39,8 @@ export type HealthAgentResult = {
   // Имена tools, вызванных коучем, по порядку за весь запуск (все раунды и сохранение): MCP-tools с префиксом
   // источника mcp_<сервер>__<tool>, локальные — без префикса.
   toolCalls: string[];
+  // Запросы коуча к базе знаний (searchKnowledge) в порядке вызовов: запрос и заголовки найденных чанков.
+  retrievals: Retrieval[];
   // Включённые серверы «по кнопке»: UI показывает их под одобренным планом.
   actions: PlanAction[];
   durationMs: number;
@@ -65,22 +69,23 @@ async function askReviewer(agent: Agent, task: string, plan: string) {
 // Задача пользователя нужна коучу, чтобы понять, просили ли сохранить план ещё и в файл. После шага harness
 // читает plans://latest и сверяет с одобренным планом: если модель tool не вызвала или исказила текст,
 // harness сам сохраняет одобренный план через тот же MCP-сервер — approve не должен теряться.
+// Возвращает результат runCoach: tools шага сохранения тоже попадают в toolCalls и retrievals запуска.
 async function savePlanByCoach(agent: Agent<CoachContext>, dataServer: MCPServer | undefined, task: string, plan: string) {
   const context: CoachContext = { approvedPlan: plan };
   const input = `${todayLine()}\n\nЗадача пользователя:\n${task}\n\n` +
     "Safety Reviewer одобрил план ниже. Сохрани его: вызови mcp_markdown_health__save_health_plan и передай план дословно. " +
     "Если в задаче пользователь просил сохранить план ещё и в файл, запиши его через tools filesystem по правилам. " +
     `Других tools не вызывай (список покупок, данные и прогноз уже учтены в плане).\n\n${plan}`;
-  const { toolCalls } = await runCoach(agent, input, context, SAVE_MAX_TURNS);
+  const coachRun = await runCoach(agent, input, context, SAVE_MAX_TURNS);
   if (!dataServer) {
     console.log(`MCP-сервер ${DATA_SERVER} не подключён: сохранение в data/output.md не проверено.`);
-    return toolCalls;
+    return coachRun;
   }
   if (normalizePlan(await readResource(dataServer, LATEST_PLAN_URI)) !== normalizePlan(plan)) {
     console.log("Коуч не сохранил одобренный план через save_health_plan, harness сохраняет его через MCP сам.");
     await dataServer.callTool("save_health_plan", { markdown: plan });
   }
-  return toolCalls;
+  return coachRun;
 }
 
 export async function runHealthAgent(task: string, options: RunOptions = {}): Promise<HealthAgentResult> {
@@ -90,12 +95,13 @@ export async function runHealthAgent(task: string, options: RunOptions = {}): Pr
   const model = modelName();
   const history = new RoundHistory();
   const toolCalls: string[] = [];
+  const retrievals: Retrieval[] = [];
   const actions = buttonServerConfigs().map(({ name, button }) => ({ server: name, label: button!.label }));
   // Каждый завершенный запуск пишет трейс в runs/; ошибка записи не роняет запуск (см. traceRun).
   const finish = async (plan: string, review: Review): Promise<HealthAgentResult> => {
     const rounds = history.toArray();
     const durationMs = Math.round(performance.now() - startedAt);
-    const result = { plan, review, rounds, ...summarizeScore(rounds), promptVersions, model, toolCalls, actions, durationMs };
+    const result = { plan, review, rounds, ...summarizeScore(rounds), promptVersions, model, toolCalls, retrievals, actions, durationMs };
     await traceRun(task, result);
     return result;
   };
@@ -126,6 +132,7 @@ export async function runHealthAgent(task: string, options: RunOptions = {}): Pr
     for (let round = 1; round <= maxRounds; round += 1) {
       const coachRun = await askCoach(coach, task, history.last);
       toolCalls.push(...coachRun.toolCalls);
+      retrievals.push(...coachRun.retrievals);
       const plan = coachRun.output;
       const review = await askReviewer(reviewer, task, plan);
       console.log(formatRound(history.record(plan, review)));
@@ -139,7 +146,9 @@ export async function runHealthAgent(task: string, options: RunOptions = {}): Pr
         continue;
       }
       if (review.verdict === "approve") {
-        toolCalls.push(...await savePlanByCoach(coach, dataServer, task, plan));
+        const saveRun = await savePlanByCoach(coach, dataServer, task, plan);
+        toolCalls.push(...saveRun.toolCalls);
+        retrievals.push(...saveRun.retrievals);
         console.log(`План одобрен и сохранен. score=${review.score}`);
         return [plan, review];
       }

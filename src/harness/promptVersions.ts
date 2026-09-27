@@ -5,7 +5,7 @@ import { join } from "node:path";
 const PROMPTS_DIR = join(process.cwd(), "prompts");
 
 // Активные версии: prompts/<файл>.<версия>.md. Новая версия — новый файл и правка только этой константы.
-export const ACTIVE_PROMPTS = { coach: "v4", reviewer: "v2" };
+export const ACTIVE_PROMPTS = { coach: "v5", reviewer: "v2" };
 export type PromptVersions = typeof ACTIVE_PROMPTS;
 
 const PROMPT_FILES: Record<keyof PromptVersions, string> = { coach: "healthCoach", reviewer: "safetyReviewer" };

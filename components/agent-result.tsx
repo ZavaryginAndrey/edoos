@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  BookOpenIcon,
   CheckIcon,
   ChefHatIcon,
   ChevronDownIcon,
@@ -23,7 +24,7 @@ import {
   UserIcon,
   WrenchIcon,
 } from "lucide-react";
-import type { HealthAgentResult, PlanAction, RoundState } from "@/src/harness/runHealthAgent";
+import type { HealthAgentResult, PlanAction, Retrieval, RoundState } from "@/src/harness/runHealthAgent";
 import { Markdown } from "@/components/markdown";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +48,7 @@ const TOOLS: Record<string, { label: string; icon: typeof WrenchIcon }> = {
   read_profile: { label: "Прочитал профиль", icon: UserIcon },
   read_recent_logs: { label: "Посмотрел дневник", icon: NotebookTextIcon },
   list_recipes: { label: "Открыл любимые рецепты", icon: ChefHatIcon },
+  searchKnowledge: { label: "Искал в базе знаний", icon: BookOpenIcon },
   suggestWorkoutTemplate: { label: "Подобрал шаблон тренировки", icon: DumbbellIcon },
   generateShoppingList: { label: "Составил список покупок в data/shopping.md", icon: ShoppingCartIcon },
   save_health_plan: { label: "Сохранил одобренный план в data/output.md", icon: SaveIcon },
@@ -78,6 +80,8 @@ export function Result({ data }: { data: HealthAgentResult }) {
   const { plan, review, rounds, improved, promptVersions, toolCalls, durationMs } = data;
   // В результатах, собранных до появления кнопок, поля actions нет.
   const actions = data.actions ?? [];
+  // До RAG в результатах (и трейсах) не было retrievals.
+  const retrievals = data.retrievals ?? [];
   const verdict = VERDICTS[review.verdict];
   const approved = review.verdict === "approve";
   const needsHuman = review.verdict === "needs_human_professional";
@@ -159,7 +163,7 @@ export function Result({ data }: { data: HealthAgentResult }) {
         </CardFooter>
       </Card>
 
-      <ToolCalls calls={toolCalls} />
+      <ToolCalls calls={toolCalls} retrievals={retrievals} />
 
       {!needsHuman && plan && (
         <>
@@ -232,7 +236,7 @@ function RoundHistory({ rounds, improved }: { rounds: RoundState[]; improved: bo
   );
 }
 
-function ToolCalls({ calls }: { calls: string[] }) {
+function ToolCalls({ calls, retrievals }: { calls: string[]; retrievals: Retrieval[] }) {
   return (
     <Card>
       <CardHeader>
@@ -240,29 +244,54 @@ function ToolCalls({ calls }: { calls: string[] }) {
         <CardDescription>Инструменты, которые коуч вызвал сам, по порядку. В скобках — источник: MCP-сервер или local</CardDescription>
       </CardHeader>
       <CardContent>
-        {calls.length ? <ToolCallList calls={calls} /> : <p className="text-muted-foreground">Агент не вызывал инструменты</p>}
+        {calls.length ? <ToolCallList calls={calls} retrievals={retrievals} /> : <p className="text-muted-foreground">Агент не вызывал инструменты</p>}
       </CardContent>
     </Card>
   );
 }
 
-function ToolCallList({ calls }: { calls: string[] }) {
+// Вызовы searchKnowledge и retrievals идут в одном порядке: n-й вызов tool-а — n-я запись retrievals.
+function ToolCallList({ calls, retrievals = [] }: { calls: string[]; retrievals?: Retrieval[] }) {
+  let retrievalIndex = 0;
   return (
     <ol className="space-y-2">
       {calls.map((name, index) => {
         const { source, tool } = parseTool(name);
-        const { label, icon: Icon } = TOOLS[tool] ?? { label: tool, icon: WrenchIcon };
+        const retrieval = tool === "searchKnowledge" ? retrievals[retrievalIndex++] : undefined;
+        const { label, icon: Icon } = retrieval
+          ? { label: `🔍 knowledge: ${retrieval.query} → ${retrieval.chunks.length} chunks`, icon: BookOpenIcon }
+          : TOOLS[tool] ?? { label: tool, icon: WrenchIcon };
         return (
-          <li key={index} className="flex items-center gap-3">
-            <span className="w-4 text-right text-xs text-muted-foreground tabular-nums">{index + 1}</span>
-            <Icon className="size-4 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1">{label}</span>
-            <Badge variant="outline" className="font-mono text-[0.625rem]">[{source}]</Badge>
-            <span className="hidden font-mono text-xs text-muted-foreground sm:inline">{tool}</span>
+          <li key={index} className="space-y-1">
+            <div className="flex items-center gap-3">
+              <span className="w-4 text-right text-xs text-muted-foreground tabular-nums">{index + 1}</span>
+              <Icon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1">{label}</span>
+              <Badge variant="outline" className="font-mono text-[0.625rem]">[{source}]</Badge>
+              <span className="hidden font-mono text-xs text-muted-foreground sm:inline">{tool}</span>
+            </div>
+            {retrieval && <RetrievedChunks retrieval={retrieval} />}
           </li>
         );
       })}
     </ol>
+  );
+}
+
+// Заголовки найденных чанков — чем коуч пользовался из базы знаний.
+function RetrievedChunks({ retrieval }: { retrieval: Retrieval }) {
+  if (retrieval.error) return <p className="pl-14 text-xs text-destructive">База знаний недоступна: {retrieval.error}</p>;
+  return (
+    <ul className="space-y-0.5 pl-14 text-xs text-muted-foreground">
+      {retrieval.chunks.map((chunk) => (
+        <li key={`${chunk.file}/${chunk.heading}`} className="flex gap-2">
+          <span className="min-w-0 flex-1 truncate">
+            <span className="font-mono">{chunk.file}</span> › {chunk.heading}
+          </span>
+          <span className="font-mono tabular-nums">{chunk.similarity.toFixed(2)}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
