@@ -46,11 +46,15 @@ export async function listTraces(): Promise<TraceSummary[]> {
 
 const showRounds = (trace: RunTrace) =>
   `${trace.rounds.length}: ${trace.rounds.map((r) => `${r.review.verdict}(${r.review.score})`).join(" → ")}`;
-const FIELDS: [string, (trace: RunTrace) => string][] = [
+// Трейсы до RAG без поля retrievals сравниваются как «—».
+const showRetrievals = (trace: RunTrace) =>
+  (trace.retrievals ?? []).map((r) => `«${r.query}» → ${r.chunks.length}${r.error ? " (ошибка)" : ""}`).join("; ") || "—";
+const FIELDS:[string, (trace: RunTrace) => string][] = [
   ["verdict", (t) => t.verdict],
   ["finalScore", (t) => String(t.finalScore ?? "—")],
   ["раунды", showRounds],
   ["toolCalls", (t) => t.toolCalls.join(", ") || "—"],
+  ["retrievals", showRetrievals],
   ["promptVersions", (t) => `coach=${t.promptVersions.coach}, reviewer=${t.promptVersions.reviewer}`],
   ["model", (t) => t.model],
   ["durationMs", (t) => String(t.durationMs)],

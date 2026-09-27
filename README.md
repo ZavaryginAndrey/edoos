@@ -11,7 +11,13 @@ DEEPSEEK_API_KEY=...
 DEEPSEEK_BASE_URL=https://api.deepseek.com   # опционально
 DEEPSEEK_MODEL=deepseek-v4-flash             # опционально
 NOTION_TOKEN=ntn_...                         # опционально: включает Notion MCP (см. ниже)
+SUPABASE_DB_URL=postgresql://...             # база знаний (RAG, см. ниже)
+EMBEDDING_API_KEY=sk-...                     # ключ OpenAI-compatible провайдера embeddings
+EMBEDDING_BASE_URL=https://api.openai.com/v1 # опционально
+EMBEDDING_MODEL=text-embedding-3-small       # опционально; размерность должна быть 1536
 ```
+
+Без `SUPABASE_DB_URL` и `EMBEDDING_API_KEY` агент работает, но `searchKnowledge` возвращает модели ошибку, и план строится без базы знаний.
 
 Внешние MCP-серверы (filesystem, погода) запускаются через `npx`: при первом запуске нужен интернет, пакеты скачаются в кэш npm.
 
@@ -42,7 +48,12 @@ components/providers.tsx      next-themes (светлая / тёмная / си�
 components/theme-toggle.tsx   переключатель темы
 src/agents/healthCoach.ts     агент-коуч: локальные tools + MCP-серверы из конфига (имена tools с префиксом сервера)
 src/agents/safetyReviewer.ts  агент-ревьюер (без tools и побочных эффектов) и pre-check задачи
-src/skills/*.ts               локальные tools коуча: suggestWorkoutTemplate, generateShoppingList
+src/skills/*.ts               локальные tools коуча: searchKnowledge, suggestWorkoutTemplate, generateShoppingList
+src/rag/                      RAG: chunking.ts (чанки по ##), embeddings.ts (fetch к /embeddings), db.ts (postgres), retriever.ts (searchKnowledge)
+knowledge/*.md                база знаний: рецепты, правила питания, шаблоны тренировок, восстановление, учёт предпочтений
+scripts/ingest.ts             npm run ingest: knowledge/*.md → embeddings → Supabase knowledge_chunks (очистить и залить заново)
+supabase/migrations/          SQL-миграции Supabase (001_knowledge.sql — таблица knowledge_chunks и hnsw-индекс)
+docs/*.sql                    документация схемы БД, файлы по порядку выполнения
 src/mcp/servers.config.ts     реестр MCP-серверов: команда запуска, env, enabled, какие tools видит коуч и когда, кнопка
 src/mcp/servers.ts            запуск серверов из конфига (MCPServerStdio), общий toolFilter, чтение resources
 src/mcp/markdownHealthServer.ts наш MCP-сервер данных (stdio, отдельный процесс): read_profile, read_recent_logs, append_daily_log, save_health_plan, list_recipes + resources
@@ -69,7 +80,7 @@ data/shopping.md              последний список покупок (ge
 
 UI собран на [shadcn/ui](https://ui.shadcn.com) (стиль `base-nova` на Base UI, Tailwind CSS v4, иконки lucide); настройки CLI — в `components.json`.
 
-Промпты, pre-check и loop перенесены из V0 без изменений. Новая версия промпта — файл вида `prompts/healthCoach.v5.md` и правка `ACTIVE_PROMPTS` в `src/harness/promptVersions.ts`. Пути к `data/` считаются от `process.cwd()`, поэтому `npm run dev` запускается из корня репозитория.
+Промпты, pre-check и loop перенесены из V0 без изменений. Новая версия промпта — файл вида `prompts/healthCoach.v6.md` и правка `ACTIVE_PROMPTS` в `src/harness/promptVersions.ts`. Пути к `data/` считаются от `process.cwd()`, поэтому `npm run dev` запускается из корня репозитория.
 
 ## MCP: данные пользователя через стандартный сервер
 
@@ -92,7 +103,7 @@ UI собран на [shadcn/ui](https://ui.shadcn.com) (стиль `base-nova` 
 
 - **MCP-tools** (данные): `read_profile`, `read_recent_logs(days)`, `list_recipes`, `save_health_plan(markdown)`, `append_daily_log(entry)`.
 - **MCP-resources** (те же данные как адресуемые документы, их читает клиент, а не модель): `profile://me`, `logs://recent` (последние 7 записей), `recipes://all`, `plans://latest`.
-- **Локальные tools** в `src/skills/`: `suggestWorkoutTemplate` и `generateShoppingList`. Для модели они ничем не отличаются от MCP-tools, в этом и смысл контраста. В UI у каждого tool есть метка источника: `[markdown-health]`, `[filesystem]`, `[weather]`, `[notion]` или `[local]`.
+- **Локальные tools** в `src/skills/`: `searchKnowledge` (база знаний, см. [RAG](#rag-база-знаний-в-supabase-pgvector)), `suggestWorkoutTemplate` и `generateShoppingList`. Для модели они ничем не отличаются от MCP-tools, в этом и смысл контраста. В UI у каждого tool есть метка источника: `[markdown-health]`, `[filesystem]`, `[weather]`, `[notion]` или `[local]`.
 - **Harness** (решения, а не данные): цикл раундов, валидация ревью, score, гейт сохранения. Сервер не знает ни о вердиктах, ни об одобрении.
 
 Гейт сохранения держит клиент. Общий `toolFilter` (`src/mcp/servers.ts`) по записи `tools.afterApprove` в конфиге скрывает `save_health_plan`, пока harness не положил в контекст `approvedPlan`. После шага сохранения harness читает `plans://latest` и сверяет его с одобренным планом. Если коуч tool не вызвал или исказил текст, harness сам вызывает `save_health_plan` через тот же сервер. `append_daily_log` сервер публикует, но коучу не отдаёт (`tools.block`): составляя план, он не должен менять дневник пользователя. У `MCPServerStdio` выключен `cacheToolsList`, потому что SDK кэширует список tools уже после фильтра, и `save_health_plan` остался бы скрытым навсегда.
@@ -185,6 +196,40 @@ npx @modelcontextprotocol/inspector node src/mcp/markdownHealthServer.ts
 - **Database** (например, Postgres или SQLite MCP) — хранить дневник и планы в базе вместо Markdown.
 - **Web Search** (например, Brave Search или Tavily MCP, ключ API) — искать рецепты и информацию о продуктах.
 
+## RAG: база знаний в Supabase pgvector
+
+Коуч ищет в базе знаний `knowledge/*.md` (рецепты, правила питания, шаблоны тренировок, правила восстановления, правила учёта предпочтений) через локальный tool `searchKnowledge`. Это простой RAG без фреймворков: один embedding запроса, один similarity search в pgvector, прямой SQL через драйвер `postgres` и `fetch` к embeddings API. Reranking, hybrid search и переписывания запроса нет.
+
+```
+knowledge/*.md ──npm run ingest──▶ чанки по «##» ──embeddings──▶ knowledge_chunks (Supabase, vector(1536))
+коуч ──searchKnowledge(query)──▶ embed(query) ──order by embedding <=> query limit 5──▶ секции с file › heading
+```
+
+- **Чанкинг** (`src/rag/chunking.ts`): 1 секция `## …` = 1 чанк с метаданными `file`, `heading`. В embedding идут заголовок и тело.
+- **Embeddings** (`src/rag/embeddings.ts`): `POST <EMBEDDING_BASE_URL>/embeddings` через `fetch`, по умолчанию OpenAI `text-embedding-3-small` (1536). У DeepSeek embeddings нет, поэтому провайдер отдельный.
+- **Retriever** (`src/rag/retriever.ts`): `searchKnowledge(query, topK = 5)` → `{ file, heading, content, similarity }[]`, где `similarity = 1 − косинусное расстояние`.
+- **Tool** (`src/skills/knowledge.ts`): отдаёт модели найденные секции с источником. Если база недоступна (нет ключа, БД), модель получает ошибку текстом и запуск продолжается.
+- **Промпт** `healthCoach.v5`: сначала искать в базе знаний, блюда брать только из `searchKnowledge` или `list_recipes` и указывать источник `(база знаний: recipes.md › …)`.
+- **Трейс и UI**: каждый вызов пишет `{ query, chunks: [{ file, heading, similarity }] }` в `retrievals` результата и трейса. В «Что сделал агент» он показывается как `🔍 knowledge: <query> → N chunks` с заголовками найденных чанков.
+
+### Настройка
+
+1. Создайте проект в [Supabase](https://supabase.com) и выполните `supabase/migrations/001_knowledge.sql` в SQL Editor (или `supabase db push`). Схема задокументирована в `docs/001_create_knowledge_chunks_table.sql`.
+2. Добавьте в `.env` `SUPABASE_DB_URL` (Dashboard → Connect → connection string, подойдёт и pooler) и `EMBEDDING_API_KEY`.
+3. Залейте базу знаний:
+   ```bash
+   npm run ingest
+   ```
+   Ингест идемпотентен: сначала считает все embeddings, затем в одной транзакции делает `truncate` и заливает чанки заново. Повторный запуск не создаёт дублей, а удалённые секции исчезают из базы. После правки `knowledge/*.md` запустите ингест снова.
+
+### Ограничение: отрицания в запросе
+
+Векторный поиск не понимает «без». На запрос «ужин с высоким белком без молочки» в top-5 попадают правила про молочные продукты и рецепт творога: слово «молочки» делает их близкими по смыслу. Ни одного ужина в выдаче при этом нет. Выручает сам коуч: промпт v5 просит искать конкретно, и следующим запросом («высокобелковый ужин из рыбы или курицы без молочных продуктов, рецепт») он получает 4 подходящих рецепта. Молочное блюдо он отбраковывает сам по тегу «содержит молочное». Обычно такое лечат reranking или hybrid search (BM25 + векторы). В этом учебном RAG их намеренно нет. Эксперимент без изменения поиска: если в embedding рецепта отдавать только заголовок и теги, а в базе хранить полный текст, на запрос про ужин находятся 3 подходящих рецепта в top-4 вместо одного. Творог при этом всё равно остаётся в выдаче.
+
+### Memory vs RAG
+
+`profile.md` и `log.md` — личная память агента: они отвечают на вопрос «кто ты» (параметры, цели, график, как прошли последние дни), принадлежат одному пользователю и меняются вместе с ним. Коуч читает их через MCP-сервер `markdown-health` как есть, без поиска по смыслу. `knowledge/` — база знаний: она отвечает на вопрос «что мы умеем» (рецепты, правила питания, шаблоны тренировок, восстановление) и одинакова для всех пользователей. Целиком в промпт она не подставляется: лежит в pgvector, и коуч по запросу достаёт только несколько релевантных секций. Память уточняет знания: если в профиле «без молочки», коуч ищет в базе «ужин с высоким белком без молочки», а при конфликте побеждает профиль. Личные данные при этом в pgvector не переносятся: их нужно читать целиком и точно, а не «похожими кусками».
+
 ## Тестовый режим (только dev)
 
 В dev-режиме `POST /api/agent/run` принимает `minRounds` и `prompts: { coach?, reviewer? }`, а UI берёт их из URL. Сценарий revise → approve:
@@ -201,7 +246,7 @@ http://localhost:3000/?coach=test-revise&reviewer=test-revise
 
 То же самое доступно в UI: `http://localhost:3000/dev` (ссылка «Dev» в шапке, только в dev-режиме). Evals запускаются по одному кейсу или все подряд (строки заполняются по мере прогона), replay — из списка трейсов `runs/`; для каждого прогона видны раунды, замечания, вызванные tools и план. Одновременно идёт только один прогон. В production `/dev` и `/api/dev/*` отвечают 404.
 
-1. **Trace.** Каждый завершённый запуск (из UI, replay или eval) пишет `runs/run-<timestamp>.json`: задача, версии промптов, модель, раунды (первые 500 символов плана + ревью), toolCalls, finalScore, verdict, durationMs. Формат — в `runs/run-example.json`. Запуск, упавший с ошибкой, трейса не оставляет; ошибка записи трейса только логируется и не роняет запуск.
+1. **Trace.** Каждый завершённый запуск (из UI, replay или eval) пишет `runs/run-<timestamp>.json`: задача, версии промптов, модель, раунды (первые 500 символов плана + ревью), toolCalls, retrievals (запросы к базе знаний и заголовки найденных чанков), finalScore, verdict, durationMs. Формат — в `runs/run-example.json`. Запуск, упавший с ошибкой, трейса не оставляет; ошибка записи трейса только логируется и не роняет запуск.
 2. **Replay.** Поправили промпт, `ACTIVE_PROMPTS` или `DEEPSEEK_MODEL` — повторите ту же задачу текущим harness:
    ```bash
    npm run replay runs/run-XXX.json
@@ -211,7 +256,7 @@ http://localhost:3000/?coach=test-revise&reviewer=test-revise
    ```bash
    npm run eval
    ```
-   Кейс — `{ name, task, expect: { verdict, minScore? } }`. `bad-medical-request` проверяет safety gate: он проходит, только если агент остановился с `needs_human_professional` и не вернул план. При любом FAIL код выхода 1; трейс упавшего кейса можно отдать в replay.
+   Кейс — `{ name, task, expect: { verdict, minScore?, toolCalls? } }`; `toolCalls` — tools, которые агент обязан вызвать (`knowledge-based-recipe` проверяет, что был retrieval через `searchKnowledge`). `bad-medical-request` проверяет safety gate: он проходит, только если агент остановился с `needs_human_professional` и не вернул план. При любом FAIL код выхода 1; трейс упавшего кейса можно отдать в replay.
 
 ## Почему удалён `index.ts`
 
