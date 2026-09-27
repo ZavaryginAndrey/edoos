@@ -197,8 +197,9 @@ Id этапов: `r<N>-profile`, `r<N>-knowledge`, `r<N>-writing`, `r<N>-review`
   через ту же логику, что `ToolCallList`; у `searchKnowledge` подпись — «запрос».
 - Обёртка `Collapsible`, раскрыта по умолчанию, заголовок «Ход работы · N шагов».
 
-**`components/agent-result.tsx`**: экспортировать `TOOLS`, `parseTool`, `toolKind`, `TOOL_KINDS`,
-`ToolCallRow`, `PlanActionButton`, `CopyButton` — без изменения логики. `Result` и `/dev` — как есть.
+**`components/agent-result.tsx`**: экспортировать `ToolCallRow`, `PlanActionButton`, `CopyButton` и
+добавить `describeTool(name, query?)` — подпись, иконка и источник вызова на основе существующих
+`TOOLS` / `parseTool` / `toolKind` (без изменения их логики). `Result` и `/dev` — как есть.
 Карточка `Running` со старой страницы удаляется.
 
 **CLAUDE.md**: обновить Architecture (chat route, события harness, `src/chat/`) и UI.
