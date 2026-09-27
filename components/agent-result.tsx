@@ -64,26 +64,41 @@ const TOOLS: Record<string, { label: string; icon: typeof WrenchIcon }> = {
 // SDK показывает модели MCP-tools как mcp_<сервер>__<tool>, заменяя «-» на «_» в обеих частях
 // (markdown-health → mcp_markdown_health__, API-post-page → API_post_page), поэтому ключи TOOLS — с «_».
 // Имена серверов в конфиге — kebab-case, для метки источника «_» возвращаем в «-».
-// Без префикса — локальные tools из src/skills/.
+// Без префикса — локальные tools из src/skills/: код самого приложения, источник «health-agent».
+const APP_SOURCE = "health-agent";
+
 function parseTool(name: string) {
   const match = /^mcp_(.+?)__(.+)$/.exec(name);
-  return match ? { source: match[1].replace(/_/g, "-"), tool: match[2] } : { source: "local", tool: name };
+  return match ? { source: match[1].replace(/_/g, "-"), tool: match[2] } : { source: APP_SOURCE, tool: name };
 }
 
-// Цвет вызова по типу: RAG (поиск по базе знаний) и MCP выделены, прочие локальные tools — нейтральные.
+// Цвет вызова по типу: RAG (поиск по базе знаний), MCP-серверы и код приложения. Бирюзовый у приложения —
+// чтобы не путать с зелёным вердиктом «Одобрено».
 const TOOL_KINDS = {
-  rag: { icon: "text-rag", badge: "border-rag/30 bg-rag/10 text-rag" },
-  mcp: { icon: "text-mcp", badge: "border-mcp/30 bg-mcp/10 text-mcp" },
-  local: { icon: "text-muted-foreground", badge: "" },
+  rag: { icon: "text-rag", badge: "bg-rag/10 text-rag" },
+  mcp: { icon: "text-mcp", badge: "bg-mcp/10 text-mcp" },
+  agent: { icon: "text-agent", badge: "bg-agent/10 text-agent" },
 } as const;
+export type ToolKind = keyof typeof TOOL_KINDS;
 
-function toolKind(source: string, tool: string): keyof typeof TOOL_KINDS {
+function toolKind(source: string, tool: string): ToolKind {
   if (tool === "searchKnowledge") return "rag";
-  return source === "local" ? "local" : "mcp";
+  return source === APP_SOURCE ? "agent" : "mcp";
 }
 
-// Строка вызова для ToolCallRow по имени tool: подпись и иконка из TOOLS, цвет и бейдж — по источнику.
-// query — подпись поиска по базе знаний (таймлайн чата); без него — обычная подпись tool-а.
+export const toolIconClass = (kind: ToolKind) => TOOL_KINDS[kind].icon;
+
+// Источник вызова: MCP-сервер, rag или health-agent.
+export function SourceBadge({ kind, source }: { kind: ToolKind; source: string }) {
+  return (
+    <span className={cn("inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[0.6875rem] font-medium", TOOL_KINDS[kind].badge)}>
+      {source}
+    </span>
+  );
+}
+
+// Вызов по имени tool: подпись и иконка из TOOLS, цвет и бейдж — по источнику (таймлайн чата).
+// query — подпись поиска по базе знаний; без него — обычная подпись tool-а.
 export function describeTool(name: string, query?: string) {
   const { source, tool } = parseTool(name);
   const kind = toolKind(source, tool);
@@ -262,7 +277,7 @@ function ToolCalls({ calls, retrievals }: { calls: string[]; retrievals: Retriev
     <Card>
       <CardHeader>
         <CardTitle>Что сделал агент</CardTitle>
-        <CardDescription>Инструменты, которые коуч вызвал сам, по порядку. В скобках — источник: MCP-сервер, RAG (база знаний) или local</CardDescription>
+        <CardDescription>Инструменты, которые коуч вызвал сам, по порядку. Справа источник: MCP-сервер, rag (база знаний) или health-agent (код приложения)</CardDescription>
       </CardHeader>
       <CardContent>
         {calls.length ? <ToolCallList calls={calls} retrievals={retrievals} /> : <p className="text-muted-foreground">Агент не вызывал инструменты</p>}
@@ -308,7 +323,7 @@ function ToolCallList({ calls, retrievals = [] }: { calls: string[]; retrievals?
   );
 }
 
-export function ToolCallRow({
+function ToolCallRow({
   number,
   icon: Icon,
   label,
@@ -335,7 +350,7 @@ export function ToolCallRow({
           <ChevronDownIcon className="ml-1 inline size-3.5 align-[-0.125em] text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" />
         )}
       </span>
-      <Badge variant="outline" className={cn("font-mono text-[0.625rem]", TOOL_KINDS[kind].badge)}>[{source}]</Badge>
+      <SourceBadge kind={kind} source={source} />
       <span className="hidden font-mono text-xs text-muted-foreground sm:inline">{tool}</span>
     </span>
   );

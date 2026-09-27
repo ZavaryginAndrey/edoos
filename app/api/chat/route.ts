@@ -30,6 +30,8 @@ export async function POST(request: Request) {
 
   const stream = createUIMessageStream<HealthChatMessage>({
     execute: async ({ writer }) => {
+      // Сообщение ассистента (и степпер с таймером) появляется сразу, а не после старта MCP-серверов.
+      writer.write({ type: "start" });
       const timeline = createTimeline(writer);
       let result: HealthAgentResult;
       try {

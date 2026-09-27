@@ -3,7 +3,7 @@
 import { ClockIcon, FileTextIcon, OctagonAlertIcon, TriangleAlertIcon } from "lucide-react";
 import type { HealthChatMessage, ResultData } from "@/src/chat/messages";
 import { CopyButton, formatDuration, MAX_ROUNDS, PlanActionButton, VERDICTS } from "@/components/agent-result";
-import { Timeline } from "@/components/chat/timeline";
+import { AgentProgress } from "@/components/chat/timeline";
 import { Markdown } from "@/components/markdown";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -33,7 +33,7 @@ export function ChatMessage({ message, running }: { message: HealthChatMessage; 
 
   return (
     <div className="space-y-5">
-      <Timeline parts={message.parts} running={running} />
+      <AgentProgress parts={message.parts} running={running} result={result} />
       {result?.review.verdict === "needs_human_professional" && <SpecialistCard issues={result.review.issues} />}
       {plan && <Markdown source={plan} className="[--typeset-size:0.9375rem]" />}
       {result && <ResultFooter result={result} plan={plan} />}
@@ -47,7 +47,7 @@ function SpecialistCard({ issues }: { issues: string[] }) {
       <OctagonAlertIcon />
       <AlertTitle>Требуется специалист</AlertTitle>
       <AlertDescription>
-        <p>Вопросы о лекарствах, симптомах и лечении лучше обсудить с врачом — коуч не даёт по ним рекомендаций.</p>
+        <p>Вопросы о лекарствах, симптомах и лечении лучше обсудить с врачом. Коуч не даёт по ним рекомендаций.</p>
         {issues.length > 0 && (
           <ul className="mt-2 list-disc space-y-1 pl-4">
             {issues.map((issue, index) => (

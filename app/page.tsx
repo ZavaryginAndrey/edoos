@@ -124,7 +124,7 @@ export default function Home() {
           <section className="pt-12 sm:pt-20">
             <h1 className="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">Персональный план без лишней воды</h1>
             <p className="mt-3 max-w-xl text-pretty text-muted-foreground">
-              Коуч составляет план по вашему профилю и дневнику, Safety Reviewer проверяет его на безопасность —
+              Коуч составляет план по вашему профилю и дневнику, Safety Reviewer проверяет его на безопасность:
               до {MAX_ROUNDS} раундов правок. Каждый шаг виден по ходу работы.
             </p>
             <div className="mt-8 flex flex-wrap gap-2">
