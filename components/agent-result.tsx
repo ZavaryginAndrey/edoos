@@ -82,6 +82,15 @@ function toolKind(source: string, tool: string): keyof typeof TOOL_KINDS {
   return source === "local" ? "local" : "mcp";
 }
 
+// Строка вызова для ToolCallRow по имени tool: подпись и иконка из TOOLS, цвет и бейдж — по источнику.
+// query — подпись поиска по базе знаний (таймлайн чата); без него — обычная подпись tool-а.
+export function describeTool(name: string, query?: string) {
+  const { source, tool } = parseTool(name);
+  const kind = toolKind(source, tool);
+  const { label, icon } = query !== undefined ? { label: `«${query}»`, icon: BookOpenIcon } : TOOLS[tool] ?? { label: tool, icon: WrenchIcon };
+  return { icon, label, kind, source: kind === "rag" ? "rag" : source, tool };
+}
+
 export const VERDICTS = {
   approve: { label: "Одобрено", icon: CircleCheckIcon, className: "bg-success/10 text-success" },
   revise: { label: "Нужна доработка", icon: TriangleAlertIcon, className: "bg-warning/10 text-warning" },
@@ -299,7 +308,7 @@ function ToolCallList({ calls, retrievals = [] }: { calls: string[]; retrievals?
   );
 }
 
-function ToolCallRow({
+export function ToolCallRow({
   number,
   icon: Icon,
   label,
@@ -356,7 +365,7 @@ type ActionState =
 
 // Кнопка сервера «по кнопке» из конфига (например, «Сохранить в Notion»): коуч выполняет поручение
 // только по явному выбору пользователя и только для одобренного плана (сверяет harness).
-function PlanActionButton({ action, plan }: { action: PlanAction; plan: string }) {
+export function PlanActionButton({ action, plan }: { action: PlanAction; plan: string }) {
   const [state, setState] = useState<ActionState>({ status: "idle" });
 
   async function runAction() {
@@ -409,7 +418,7 @@ function Stat({ label, value, max, children }: { label: string; value: number; m
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
